@@ -1,0 +1,199 @@
+---
+title: "prediction writeup assignment finale"
+author: "Gebremeskel Mamu Werid"
+date: "February 22, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Introduction
+
+This is a machine learning assignment on prediction. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. The assignment will be done based on the following instructions.
+### goal of the assignment
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+### Background
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset).
+
+### Data
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+### Instructions for submitting the assignment
+
+#### Peer Review Portion
+Your submission for the Peer Review portion should consist of a link to a Github repo with your R markdown and compiled HTML file describing your analysis. Please constrain the text of the writeup to < 2000 words and the number of figures to be less than 5. It will make it easier for the graders if you submit a repo with a gh-pages branch so the HTML page can be viewed online (and you always want to make it easy on graders :-).
+
+#### Course Project Prediction Quiz Portion
+Apply your machine learning algorithm to the 20 test cases available in the test data above and submit your predictions in appropriate format to the Course Project Prediction Quiz for automated grading.
+
+#### Reproducibility
+Due to security concerns with the exchange of R code, your code will not be run during the evaluation by your classmates. Please be sure that if they download the repo, they will be able to view the compiled HTML version of your analysis.
+
+
+## 2. getting and cleaning data
+
+Before any thing else, we need to get (import or download) the data and make sure that it is clean and ready for analysis.
+  
+```{r, cache = T}
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+library(corrplot)
+```
+
+### Get the data by downloading
+
+```{r, cache = T}
+trainUrl <-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+trainFile <- "./data/pml-training.csv"
+testFile  <- "./data/pml-testing.csv"
+if (!file.exists("./data")) {
+  dir.create("./data")
+}
+if (!file.exists(trainFile)) {
+  download.file(trainUrl, destfile=trainFile, method="curl")
+}
+if (!file.exists(testFile)) {
+  download.file(testUrl, destfile=testFile, method="curl")
+}
+```  
+
+### See how the data looklike and clean it
+After downloading the data from the data source, read the two csv files into two data frames and remove all observations with N.A values and some meaningless variables
+  
+
+```{r, cache = T}
+trainRaw <- read.csv ("./data/pml-training.csv", na.strings=c("NA","#DIV/0!",""))
+testRaw <- read.csv ("./data/pml-testing.csv", na.strings=c("NA","#DIV/0!",""))
+dim(trainRaw)
+dim(testRaw)
+```
+The training data set contains 19622 observations and 160 variables, while the testing data set contains 20 observations and 160 variables. The "classe" variable in the training set is the outcome to predict. 
+
+Remove columns that do not contribute much to the accelerometer measurements.
+```{r, cache = T}
+classe <- trainRaw$classe
+trainRemove <- grepl("^X|timestamp|window", names(trainRaw))
+trainRaw <- trainRaw[, !trainRemove]
+trainCleaned <- trainRaw[, sapply(trainRaw, is.numeric)]
+trainCleaned$classe <- classe
+testRemove <- grepl("^X|timestamp|window", names(testRaw))
+testRaw <- testRaw[, !testRemove]
+testCleaned <- testRaw[, sapply(testRaw, is.numeric)]
+```
+
+### Slice the data
+
+Split the cleaned training set into a training data set (60%) and a validation data set (40%). We will use the validation data set to conduct cross validation in future steps. 
+
+```{r, cache = T}
+set.seed(22519) # For reproducibile purpose
+inTrain <- createDataPartition(trainCleaned$classe, p=0.60, list=F)
+trainData <- trainCleaned[inTrain, ]
+testData <- trainCleaned[-inTrain, ]
+```
+### final cleaning and structuring
+Then, we need to clean and structure the data using only valid indicators/features. A certain selection of
+feature will be removed. They are in the following criterias: 
+1.Variables with variances that are close to zero(considered constant) 
+2.Variables with missing readings over 75% 
+3.Variables that are not fit to be predictors
+
+```{r, cache = T}
+mytrain_SUB <- trainData #creating another subset to iterate in loop
+for (i in 1:length(trainData)) { #for every column in the training dataset
+if (sum(is.na(trainData[ , i])) / nrow(trainData) >= .75) { #if n?? NAs > 60% of total observations
+for (j in 1:length(mytrain_SUB)) { 
+if (length(grep(names(trainData[i]), names(mytrain_SUB)[j]))==1) { #if the columns are the same:
+mytrain_SUB <- mytrain_SUB[ , -j] #Remove that column
+    }
+  }
+ }
+}
+#To check the new N?? of observations
+dim(mytrain_SUB) 
+mytrain_SUB2 <- mytrain_SUB[,8:length(mytrain_SUB)]
+NZV <- nearZeroVar(mytrain_SUB2, saveMetrics = TRUE)
+keep <- names(mytrain_SUB2)
+```
+For further understanding the data
+```{r, cache = T}
+plot(mytrain_SUB2$classe, col="yellow", main="Plot of levels of variable classe within the TrainTrainingSet data set", xlab="classe", ylab="Frequency")
+```
+
+Based on the graph above, we can see that each level frequency is within the same order of magnitude of each other. Level A is the most frequent while level D is the least frequent.
+
+## 3. building a model
+
+Using **Random Forest** algorithm, predictive model was fitted. when applying the algorithm, **5-fold cross validation** was used. 
+ 
+```{r, cache = T}
+controlRf <- trainControl(method="cv", 5)
+modelRf <- train(classe ~ ., data = mytrain_SUB2, method="rf", trControl=controlRf, ntree=250)
+modelRf
+```
+
+Estimate the performance of the model on the validation data set.  
+```{r, cache = T}
+predictRf <- predict(modelRf, testData)
+confusionMatrix(testData$classe, predictRf)
+```
+
+```{r, cache = T}
+accuracy <- postResample(predictRf, testData$classe)
+accuracy
+oose <- 1 - as.numeric(confusionMatrix(testData$classe, predictRf)$overall[1])
+oose
+```
+
+## summary of acuracy and error
+
+The estimated accuracy of the model is 98.5% and the estimated out-of-sample error is  1.5%.
+
+## Predicting for Test Data Set
+
+We apply the model to the original testing data set downloaded from the data source. We remove the `problem_id` column first.  
+
+```{r, cache = T}
+result <- predict(modelRf, testCleaned[, -length(names(testCleaned))])
+result
+```
+
+## summary
+The model statistics showed that the built model had the overall  accuracy (with 95% CI) of 98.5% for the testing set, which is not overlapping with observations used to built the model. The sensitivity was in between 96%-99% and the specificity was over 99% for all classes ( for all the 5 classes). Overall, the model is well developed to predict the exercise classes during weight lifting.
+
+## Annex: figures
+
+1. Correlation Matrix Visualization
+
+```{r, cache = T}
+corrPlot <- cor(mytrain_SUB2[, -length(names(mytrain_SUB2))])
+corrplot(corrPlot, method="color")
+```
+
+2. Decision Tree Visualization
+
+```{r, cache = T}
+treeModel <- rpart(classe ~ ., data = mytrain_SUB2, method="class")
+prp(treeModel) # fast plot
+```
+
+
+
+
